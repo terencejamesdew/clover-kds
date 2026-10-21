@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spruce Coffee | Kitchen Display</title>
+<style>
+  :root {
+    --bg: #e8eeeb; --panel: #f5f7f3; --card: #fffefa; --line: #cbd5d1;
+    --text: #1c3341; --muted: #687b7c; --brand: #17364c; --spruce: #3f7658;
+    --new: #3f6987; --cooking: #a85f32; --ready: #477b5d; --late: #b94e45; --warn: #986822;
+    --hot: #d2552f; --iced: #2f86c9; --togo: #3f9a5c; --here: #b9a3e3;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.3 "Avenir Next", Avenir, "Segoe UI", sans-serif; }
+  body { height: 100vh; overflow: hidden; display: flex; flex-direction: column;
+    background-image: repeating-linear-gradient(135deg, rgba(29, 57, 67, .025) 0 1px, transparent 1px 12px); }
+  header { display: flex; align-items: center; gap: 10px; min-height: 56px; padding: 6px 12px;
+    border-bottom: 1px solid #aebcba; background: #b9c7c7; flex: 0 0 auto; }
+  .brand { display: flex; align-items: center; gap: 9px; }
+  .brand-mark { width: 42px; height: 42px; flex: 0 0 42px; object-fit: cover; border-radius: 50%;
+    background: #f5f4ef; border: 1px solid rgba(23, 54, 76, .2); }
+  .brand-copy { display: grid; gap: 1px; }
+  header h1 { color: var(--brand); font: 700 20px/1 Georgia, "Times New Roman", serif; margin: 0; }
+  .brand-label { color: #42606a; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+  .pill { font-size: 12px; padding: 4px 9px; border: 1px solid rgba(23, 54, 76, .12);
+    border-radius: 999px; background: rgba(255, 254, 250, .72); color: var(--muted); white-space: nowrap; }
+  .pill.ok::before, .pill.bad::before { content: ""; display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+  .pill.ok::before { background: var(--ready); } .pill.bad::before { background: var(--late); }
+  .spacer { flex: 1; }
+  #clock { color: var(--brand); font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 700; white-space: nowrap; }
+  button { font: inherit; font-size: 14px; font-weight: 650; color: var(--brand); background: #fffefa;
+    border: 1px solid #b7c5c1; border-radius: 6px; min-height: 44px; padding: 6px 11px;
+    cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; white-space: nowrap; }
+  button:hover { border-color: var(--spruce); background: #f2f6f0; }
+  button:active { background: #e6eee7; transform: translateY(1px); }
+  button:focus-visible { outline: 3px solid rgba(63, 118, 88, .32); outline-offset: 2px; }
+  #fs { width: 44px; padding-inline: 6px; }
+
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 8px; }
+  .col { background: rgba(255, 254, 250, .74); border: 1px solid rgba(92, 119, 113, .18);
+    border-radius: 7px; display: flex; flex-direction: column; min-height: 0; }
+  .col h2 { margin: 0; padding: 8px 10px 7px; font-size: 13px; font-weight: 750; text-transform: uppercase;
+    display: flex; justify-content: space-between; border-top: 4px solid var(--c); color: var(--brand); }
+  .col h2 .count { color: var(--c); font-variant-numeric: tabular-nums; }
+  .col-search { margin: 0 6px 6px; min-height: 36px; padding: 5px 9px; font: inherit; font-size: 14px;
+    border: 1px solid #c3cfcb; border-radius: 6px; background: #fffefa; color: var(--text); }
+  .list { overflow-y: auto; padding: 2px 6px 8px; display: grid; gap: 6px; align-content: start; grid-template-columns: minmax(0, 1fr); }
+  [data-stage=new] { --c: var(--new); } [data-stage=cooking] { --c: var(--cooking); }
+  [data-stage=ready], [data-stage=done] { --c: var(--ready); }
+
+  /* border shows the order type: green = To Go, light purple = For Here */
+  .ticket { background: var(--card); border: 3px solid #d8dfda; border-radius: 7px; padding: 6px 7px; user-select: none; }
+  .ticket[data-type="to go"] { border-color: var(--togo); }
+  .ticket[data-type="for here"] { border-color: var(--here); }
+  .ticket[data-type="to go"] .t-type { color: #fffefa; background: var(--togo); border-color: var(--togo); }
+  /* still not started after WARN_MIN minutes: the border flashes red */
+  .ticket.slow-start { animation: slow-start 1s ease-in-out infinite alternate; }
+  @keyframes slow-start { to { border-color: var(--late); box-shadow: 0 0 0 3px rgba(185, 78, 69, .35); } }
+  @media (prefers-reduced-motion: reduce) { .ticket.slow-start { animation: none; border-color: var(--late); } }
+  .ticket[data-type="for here"] .t-type { color: #3b2a63; background: #ebe3fa; border-color: var(--here); }
+  .ticket.fresh { animation: flash 1.2s ease-out 3; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 0 var(--c); } 100% { box-shadow: 0 0 0 10px transparent; } }
+  .t-head { display: flex; align-items: center; gap: 6px; }
+  .t-num { color: var(--brand); font: 700 19px/1.1 Georgia, "Times New Roman", serif; }
+  .t-type { font-size: 10px; font-weight: 800; text-transform: uppercase; color: #17364c;
+    background: #dceaf0; border: 1px solid #87a7b5; border-radius: 4px; padding: 2px 6px; white-space: nowrap; }
+  .t-type.missing { color: #655b4e; background: #ece8df; border-color: #cbc3b4; }
+  .t-age { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted); }
+  .t-age.warn { color: var(--warn); } .t-age.late { color: var(--late); }
+  .t-done { margin-left: auto; font-weight: 700; color: var(--ready); white-space: nowrap; }
+  .t-customer { font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+
+  .group-label { margin: 6px 0 3px; font-size: 10px; font-weight: 800; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--muted); }
+  /* one card per item */
+  .item { display: block; width: 100%; min-height: 0; margin-top: 4px; padding: 5px 8px; text-align: left;
+    font-weight: 400; white-space: normal; background: #fbfaf5; border: 1px solid #dfe4df; border-radius: 5px; }
+  .item:hover { background: #f4f6f1; border-color: #c9d2cc; }
+  .item:active { transform: none; }
+  .item[disabled] { cursor: default; }
+  .i-name { display: block; font-size: 15px; font-weight: 700; color: var(--text); }
+  .i-qty { color: var(--spruce); font-weight: 800; }
+  .i-mods { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+  .emoji { display: inline-block; font-size: 19px; line-height: 1; }
+  .i-note .emoji { vertical-align: -2px; }
+  .i-mods > span { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 2px 8px;
+    font-size: 15px; font-weight: 800; line-height: 1.15; color: #2f3e41; background: #e6ebe6; border-radius: 4px; }
+  .i-mods > .temp { color: #fffefa; letter-spacing: .04em; text-transform: uppercase; }
+  .i-mods > .temp.hot { background: var(--hot); } .i-mods > .temp.iced { background: var(--iced); }
+  .item.done { opacity: .42; background: #eceeea; }
+
+  /* notes flash so they can't be missed */
+  .i-note, .note { display: block; margin-top: 4px; padding: 4px 7px; border-left: 4px solid #bd8421; border-radius: 3px;
+    background: #f6e7b9; color: #553b12; font-size: 13px; font-weight: 700;
+    animation: note-flash .9s ease-in-out infinite alternate; }
+  .note { margin-top: 6px; }
+  .item.done .i-note { animation: none; }
+  @keyframes note-flash {
+    from { background: #f6e7b9; border-left-color: #bd8421; box-shadow: 0 0 0 0 transparent; }
+    to { background: #f2a93b; border-left-color: #7a3d00; box-shadow: 0 0 0 3px #f2a93b; color: #2b1a00; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .i-note, .note { animation: none; background: #f2a93b; border-left-color: #7a3d00; color: #2b1a00; }
+  }
+
+  .t-foot { display: flex; justify-content: space-between; margin-top: 5px; font-size: 11px; color: var(--muted); }
+  .t-actions { display: flex; gap: 6px; margin-top: 6px; }
+  .t-actions button { flex: 1; min-height: 44px; padding: 6px 8px; font-weight: 700; }
+  .t-actions .back { flex: 0 0 76px; }
+  .t-actions .go { background: var(--c); color: #fffefa; border-color: var(--c); }
+  .t-actions .go:hover { filter: brightness(.94); background: var(--c); }
+  .empty { color: var(--muted); text-align: center; padding: 20px 0; font-size: 14px; grid-column: 1 / -1; }
+
+  #banner { display: none; background: #f6dfda; color: #762f2b; padding: 6px 14px; font-size: 14px; }
+  #banner.show { display: block; }
+
+  /* All tickets panel */
+  dialog { width: min(900px, calc(100vw - 32px)); max-height: calc(100vh - 48px); padding: 0; border: 0;
+    border-radius: 10px; background: var(--panel); color: var(--text); box-shadow: 0 18px 50px rgba(18, 38, 48, .3); }
+  dialog::backdrop { background: rgba(18, 38, 48, .45); }
+  .all-wrap { display: flex; flex-direction: column; max-height: calc(100vh - 48px); }
+  .all-top { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px; border-bottom: 1px solid var(--line); }
+  .all-top h2 { margin: 0 6px 0 0; font: 700 19px/1 Georgia, "Times New Roman", serif; color: var(--brand); }
+  #search { flex: 1 1 220px; min-height: 44px; padding: 8px 11px; font: inherit; font-size: 15px;
+    border: 1px solid #b7c5c1; border-radius: 6px; background: #fffefa; color: var(--text); }
+  .filters { display: flex; gap: 4px; }
+  .filters button[aria-pressed=true] { background: var(--brand); color: #fffefa; border-color: var(--brand); }
+  #all-list { overflow-y: auto; padding: 10px 12px 12px; display: grid; gap: 8px; align-content: start; align-items: start;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .stage-tag { font-size: 10px; font-weight: 800; text-transform: uppercase; color: var(--c); }
+
+  @media (max-width: 860px) {
+    body { height: auto; min-height: 100vh; overflow: auto; }
+    header { flex-wrap: wrap; }
+    .brand-label, #mode { display: none; }
+    main { grid-template-columns: 1fr; }
+    .col { min-height: 140px; }
+    .list { overflow: visible; }
+  }
+  @media (hover: none) {
+    button:hover { border-color: #b7c5c1; background: #fffefa; }
+    .item:hover { background: #fbfaf5; border-color: #dfe4df; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <img class="brand-mark" src="https://static.wixstatic.com/media/9b8202_b9cd199989fd400c8d4c898565a9e4e1~mv2.png/v1/fill/w_300,h_300,al_c,q_85,usm_0.66_1.00_0.01,enc_avif,quality_auto/9b8202_b9cd199989fd400c8d4c898565a9e4e1~mv2.png" alt="Spruce Coffee tree and cup logo">
+    <div class="brand-copy"><h1>Spruce Coffee</h1><span class="brand-label">Kitchen display</span></div>
+  </div>
+  <span id="conn" class="pill bad">Connecting…</span>
+  <span id="mode" class="pill" hidden>Demo data</span>
+  <span class="spacer"></span>
+  <button id="all-btn" title="Search every ticket from today, including finished ones">☰ All tickets</button>
+  <button id="sound" title="Chime on new orders">🔔 On</button>
+  <button id="fs" title="Full screen" aria-label="Toggle full screen">⛶</button>
+  <span id="clock"></span>
+</header>
+<div id="banner"></div>
+<main>
+  <section class="col" data-stage="new"><h2>New <span class="count">0</span></h2>
+    <input class="col-search" type="search" id="search-new" placeholder="Search new" aria-label="Search New" autocomplete="off"><div class="list"></div></section>
+  <section class="col" data-stage="cooking"><h2>In progress <span class="count">0</span></h2>
+    <input class="col-search" type="search" id="search-cooking" placeholder="Search in progress" aria-label="Search In progress" autocomplete="off"><div class="list"></div></section>
+  <section class="col" data-stage="ready"><h2>Ready <span class="count">0</span></h2>
+    <input class="col-search" type="search" id="search-ready" placeholder="Search ready" aria-label="Search Ready" autocomplete="off"><div class="list"></div></section>
+</main>
+
+<dialog id="all">
+  <div class="all-wrap">
+    <div class="all-top">
+      <h2>All tickets</h2>
+      <input id="search" type="search" placeholder="Search name, ticket #, or item" autocomplete="off">
+      <div class="filters">
+        <button data-filter="finished" aria-pressed="true">Finished</button>
+        <button data-filter="active" aria-pressed="false">Active</button>
+        <button data-filter="all" aria-pressed="false">All</button>
+      </div>
+      <button id="all-close" aria-label="Close">✕</button>
+    </div>
+    <div id="all-list"></div>
+  </div>
+</dialog>
+
+<script>
+(() => {
+  const WARN_MIN = 8, LATE_MIN = 15;              // ticket age thresholds (minutes)
+  const NEXT = { new: 'cooking', cooking: 'ready' };
+  const PREV = { cooking: 'new', ready: 'cooking', done: 'cooking' };
+  const LABEL = { new: 'Start', cooking: 'Ready' };
+  const STAGE_NAME = { new: 'New', cooking: 'In progress', ready: 'Ready', done: 'Ready' };
+  const MILKS = [[/\boat\b/i, '🌾'], [/\balmond\b/i, '🌰'], [/\bsoy\b/i, '🫘'], [/\bcoconut\b/i, '🥥'],
+    [/\bwhole\b|\bskim\b|half (and|&) half|\bbreve\b|\b2%|\bmilk\b/i, '🥛']];
+  const TEMP_ICON = { hot: '🔥', iced: '🧊' };
+  const finished = o => o.stage === 'ready' || o.stage === 'done';
+  const matches = (o, q) => !q || [o.number, o.customer, o.note, o.orderType, ...o.items.flatMap(i => [i.name, i.note, ...i.mods])]
+    .join(' ').toLowerCase().includes(q);
+
+  let state = { orders: [] }, allOrders = [], seen = null, clockSkew = 0;
+  let soundOn = load('kds.sound', true);
+  const $ = s => document.querySelector(s);
+
+  // ---- live stream ----
+  function connect() {
+    const es = new EventSource('/events');
+    es.onopen = () => setConn(true);
+    es.onerror = () => setConn(false);
+    es.onmessage = ev => {
+      const next = JSON.parse(ev.data);
+      clockSkew = next.serverTime - Date.now();
+      const ids = new Set(next.orders.map(o => o.id));
+      const fresh = seen ? next.orders.filter(o => !seen.has(o.id) && o.stage === 'new') : [];
+      seen = ids;
+      state = next;
+      render(new Set(fresh.map(o => o.id)));
+      if (fresh.length) chime();
+      if ($('#all').open) loadAll();
+    };
+  }
+
+  // ---- render ----
+  function render(freshIds = new Set()) {
+    $('#mode').hidden = !state.demo;
+    const b = $('#banner');
+    b.textContent = state.error ? 'Clover sync problem: ' + state.error : '';
+    b.classList.toggle('show', !!state.error);
+
+    for (const col of document.querySelectorAll('.col')) {
+      const stage = col.dataset.stage;
+      const q = col.querySelector('.col-search').value.trim().toLowerCase();
+      const all = state.orders.filter(o => stage === 'ready' ? finished(o) : o.stage === stage);
+      const list = all.filter(o => matches(o, q));
+      if (stage === 'ready') list.sort((a, b) => b.stageAt - a.stageAt); // newest finished first
+      col.querySelector('.count').textContent = q ? `${list.length} of ${all.length}` : all.length;
+      const box = col.querySelector('.list');
+      box.innerHTML = list.length ? '' : `<div class="empty">${q ? 'No matching orders' : 'No orders'}</div>`;
+      for (const o of list) box.appendChild(ticket(o, freshIds.has(o.id)));
+    }
+    tick();
+  }
+
+  function ticket(o, fresh, inPanel = false) {
+    const el = document.createElement('article');
+    const done = finished(o);
+    el.className = 'ticket' + (fresh ? ' fresh' : '');
+    el.dataset.stage = o.stage;
+    el.dataset.created = o.createdTime;
+    el.dataset.type = (o.orderType || '').toLowerCase();
+    const drinks = o.items.filter(i => i.kind === 'drink'), food = o.items.filter(i => i.kind !== 'drink');
+    const group = (label, items) => items.length
+      ? `<div class="group-label">${label}</div>${items.map(i => itemCard(i, done)).join('')}` : '';
+    el.innerHTML = `
+      <div class="t-head">
+        <span class="t-num">#${esc(o.number)}</span>
+        ${o.orderType ? `<span class="t-type">${esc(o.orderType)}</span>` : '<span class="t-type missing">Type not set</span>'}
+        ${done ? `<span class="t-done" title="Completed">✓ ${time(o.stageAt)}</span>` : '<span class="t-age"></span>'}
+        ${inPanel ? `<span class="stage-tag">${STAGE_NAME[o.stage] || o.stage}</span>` : ''}
+      </div>
+      ${o.customer ? `<div class="t-customer">${esc(o.customer)}</div>` : ''}
+      ${group('Drinks', drinks)}${group('Food', food)}
+      ${o.note ? `<div class="note">${esc(o.note)}</div>` : ''}
+      <div class="t-foot"><span>${esc(o.employee || '')}</span><span>${time(o.createdTime)}</span></div>
+      <div class="t-actions">
+        ${PREV[o.stage] ? `<button class="back" title="Move back one stage" aria-label="Move order back one stage">↶ Back</button>` : ''}
+        ${NEXT[o.stage] ? `<button class="go">${LABEL[o.stage]} →</button>` : ''}
+      </div>`;
+    el.querySelector('.go')?.addEventListener('click', () => move(o.id, NEXT[o.stage]));
+    el.querySelector('.back')?.addEventListener('click', () => move(o.id, PREV[o.stage]));
+    for (const btn of el.querySelectorAll('.item')) btn.onclick = () => toggleItem(o.id, btn.dataset.key);
+    return el;
+  }
+
+  function itemCard(i, finishedTicket) {
+    // Hot / Iced lead the customizations as one pill, so those modifiers aren't repeated
+    const mods = i.mods.filter(m => !/^(hot|iced?)$/i.test(m.trim()));
+    const done = i.done || finishedTicket; // everything on a Ready ticket is greyed
+    const pills = (i.temp ? `<span class="temp ${i.temp}"><span class="emoji">${TEMP_ICON[i.temp]}</span>${i.temp}</span>` : '') + mods.map(m => `<span>${milk(m)}${esc(m)}</span>`).join('');
+    return `<button class="item${done ? ' done' : ''}" data-key="${esc(i.key)}" aria-pressed="${done}"
+        title="${finishedTicket ? 'Tap to send back to In progress' : 'Tap when made'}">
+      <span class="i-name">${esc(i.name)}${i.qty !== 1 ? ` <span class="i-qty">×${fmtQty(i.qty)}</span>` : ''}</span>
+      ${pills ? `<span class="i-mods">${pills}</span>` : ''}
+      ${i.note ? `<span class="i-note">${milk(i.note)}${milk(i.note) ? ' ' : ''}${esc(i.note)}</span>` : ''}
+    </button>`;
+  }
+  function milk(text) { const hit = MILKS.find(([re]) => re.test(text)); return hit ? `<span class="emoji">${hit[1]}</span>` : ''; }
+
+  // optimistic updates so taps feel instant; they mirror the server's rules
+  const copies = id => [state.orders, allOrders].map(list => list.find(x => x.id === id)).filter(Boolean);
+  const STAGE_ORDER = ['new', 'cooking', 'ready', 'done'];
+  function setLocalStage(o, stage) {
+    if (stage === 'ready') o.items.forEach(i => { i.done = true; });
+    else if (STAGE_ORDER.indexOf(stage) < STAGE_ORDER.indexOf(o.stage)) o.items.forEach(i => { i.done = false; });
+    o.stage = stage; o.stageAt = Date.now();
+  }
+  function refresh() { render(); if ($('#all').open) renderAll(); }
+
+  function move(id, stage) {
+    copies(id).forEach(o => setLocalStage(o, stage));
+    refresh();
+    post('/api/orders/' + encodeURIComponent(id), { stage }).then(() => $('#all').open && loadAll());
+  }
+
+  function toggleItem(id, key) {
+    const [first] = copies(id);
+    const item = first && first.items.find(i => i.key === key);
+    if (!item) return;
+    // on a Ready ticket a tap always un-greys that item and sends the ticket back to In progress
+    const done = finished(first) ? false : !item.done;
+    for (const o of copies(id)) {
+      if (finished(o)) { o.items.forEach(i => { i.done = i.key !== key; }); o.stage = 'cooking'; o.stageAt = Date.now(); continue; }
+      o.items.find(i => i.key === key).done = done;
+      if (done && o.stage === 'new') { o.stage = 'cooking'; o.stageAt = Date.now(); }
+      if (o.items.every(i => i.done)) setLocalStage(o, 'ready');
+    }
+    refresh();
+    post('/api/orders/' + encodeURIComponent(id) + '/items', { key, done }).then(() => $('#all').open && loadAll());
+  }
+
+  async function post(url, body) {
+    try {
+      await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    } catch { setConn(false); }
+  }
+
+  // ---- All tickets (search finished ones) ----
+  let filter = 'finished';
+  async function loadAll() {
+    try { allOrders = (await (await fetch('/api/tickets')).json()).orders; } catch { allOrders = []; }
+    renderAll();
+  }
+  function renderAll() {
+    const q = $('#search').value.trim().toLowerCase();
+    const list = allOrders.filter(o => (filter === 'all' || (filter === 'finished') === finished(o)) && matches(o, q));
+    const box = $('#all-list');
+    box.innerHTML = list.length ? '' : '<div class="empty">No matching tickets</div>';
+    for (const o of list) box.appendChild(ticket(o, false, true));
+    tick();
+  }
+  $('#all-btn').onclick = () => { $('#all').showModal(); $('#search').value = ''; loadAll(); $('#search').focus(); };
+  $('#all-close').onclick = () => $('#all').close();
+  $('#all').addEventListener('click', e => { if (e.target === $('#all')) $('#all').close(); });
+  $('#search').oninput = renderAll;
+  for (const input of document.querySelectorAll('.col-search')) input.oninput = () => render();
+  for (const b of document.querySelectorAll('.filters button')) {
+    b.onclick = () => {
+      filter = b.dataset.filter;
+      document.querySelectorAll('.filters button').forEach(x => x.setAttribute('aria-pressed', x === b));
+      renderAll();
+    };
+  }
+
+  // ---- timers ----
+  function tick() {
+    const now = Date.now() + clockSkew;
+    $('#clock').textContent = new Date(now).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    for (const t of document.querySelectorAll('.ticket')) {
+      const age = t.querySelector('.t-age');
+      if (!age) continue; // finished tickets show their completion time instead
+      const mins = (now - Number(t.dataset.created)) / 60000;
+      age.textContent = fmtAge(mins);
+      age.classList.toggle('warn', mins >= WARN_MIN && mins < LATE_MIN);
+      age.classList.toggle('late', mins >= LATE_MIN);
+      t.classList.toggle('late', mins >= LATE_MIN);
+      t.classList.toggle('slow-start', t.dataset.stage === 'new' && mins >= WARN_MIN);
+    }
+  }
+  setInterval(tick, 1000);
+
+  // ---- sound ----
+  let ctx;
+  function chime() {
+    if (!soundOn) return;
+    try {
+      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      [880, 1320].forEach((f, i) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.frequency.value = f; o.connect(g); g.connect(ctx.destination);
+        const t = ctx.currentTime + i * 0.18;
+        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3, t + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+        o.start(t); o.stop(t + 0.4);
+      });
+    } catch {}
+  }
+  function paintSound() { $('#sound').textContent = soundOn ? '🔔 On' : '🔕 Off'; }
+  $('#sound').onclick = () => { soundOn = !soundOn; save('kds.sound', soundOn); paintSound(); if (soundOn) chime(); };
+  paintSound();
+
+  $('#fs').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.();
+
+  // ---- helpers ----
+  function setConn(ok) {
+    const c = $('#conn');
+    c.className = 'pill ' + (ok ? 'ok' : 'bad');
+    c.textContent = ok ? 'Live' : 'Reconnecting…';
+  }
+  function fmtAge(m) { const s = Math.max(0, Math.floor(m * 60)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+  function fmtQty(q) { return Number.isInteger(q) ? q : q.toFixed(2); }
+  function time(ms) { return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
+  function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function load(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } }
+  function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+
+  connect();
+})();
+</script>
+</body>
+</html>

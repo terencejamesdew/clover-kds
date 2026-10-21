@@ -102,19 +102,20 @@ function upsert(o) {
   // only today's orders (the modifiedTime poll also returns older orders that were edited today)
   if ((o.createdTime || Date.now()) < startOfToday()) return orders.delete(o.id);
   const items = (o.lineItems && o.lineItems.elements) || [];
-  const grouped = new Map();
-  for (const li of items) {
-    if (li.refunded || li.exchanged) continue;
-    if (/^\s*\(R\)/i.test(li.name || '')) continue; // "(R)" items are reprints
+  // every item is its own card, repeats included, so each can be tapped done separately
+  const cards = [];
+  items.forEach((li, idx) => {
+    if (li.refunded || li.exchanged) return;
+    if (/^\s*\(R\)/i.test(li.name || '')) return; // "(R)" items are reprints
     const mods = ((li.modifications && li.modifications.elements) || []).map(m => m.name).filter(Boolean);
-    const qty = li.unitQty && li.unitQty !== 1000 ? li.unitQty / 1000 : 1; // unitQty is in thousandths
+    const qty = li.unitQty ? li.unitQty / 1000 : 1; // unitQty is in thousandths; whole numbers become separate cards
+    const copies = Number.isInteger(qty) && qty > 1 ? qty : 1;
     const note = (li.note || '').trim();
-    const key = [li.name, mods.join('|'), note].join('§');
-    const g = grouped.get(key) || { key, name: li.name || 'Item', mods, note, qty: 0, ...classify(li, mods) };
-    g.qty += qty;
-    grouped.set(key, g);
-  }
-  if (!grouped.size) return; // empty tickets aren't kitchen-relevant yet
+    for (let n = 0; n < copies; n++) {
+      cards.push({ key: `${li.id || 'line' + idx}#${n}`, name: li.name || 'Item', mods, note, ...classify(li, mods) });
+    }
+  });
+  if (!cards.length) return; // empty tickets aren't kitchen-relevant yet
   const { note, validatedName } = splitNote(o.note);
   orders.set(o.id, {
     id: o.id,
@@ -130,7 +131,7 @@ function upsert(o) {
     validatedName,
     note,
     total: typeof o.total === 'number' ? o.total : null,
-    items: [...grouped.values()],
+    items: cards,
   });
   if (!stages[o.id]) setStage(o.id, 'new', false);
 }

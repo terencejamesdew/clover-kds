@@ -79,17 +79,24 @@
   .item { display: block; width: 100%; min-height: 0; margin-top: 4px; padding: 5px 8px; text-align: left;
     font-weight: 400; white-space: normal; background: #fbfaf5; border: 1px solid #dfe4df; border-radius: 5px; }
   .item:hover { background: #f4f6f1; border-color: #c9d2cc; }
+  /* left edge: red = hot, blue = iced */
+  .item.hot, .item.hot:hover { border-left: 6px solid var(--hot); }
+  .item.iced, .item.iced:hover { border-left: 6px solid var(--iced); }
   .item:active { transform: none; }
   .item[disabled] { cursor: default; }
-  .i-name { display: block; font-size: 15px; font-weight: 700; color: var(--text); }
-  .i-qty { color: var(--spruce); font-weight: 800; }
+  .i-name { display: block; font-size: 19px; font-weight: 800; line-height: 1.2; color: var(--text); }
   .i-mods { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
-  .emoji { display: inline-block; font-size: 19px; line-height: 1; }
+  .emoji { display: inline-block; font-size: 15px; line-height: 1; }
   .i-note .emoji { vertical-align: -2px; }
-  .i-mods > span { display: inline-flex; align-items: center; gap: 4px; min-height: 26px; padding: 2px 8px;
-    font-size: 15px; font-weight: 800; line-height: 1.15; color: #2f3e41; background: #e6ebe6; border-radius: 4px; }
+  .i-mods > span { display: inline-flex; align-items: center; gap: 3px; min-height: 20px; padding: 1px 6px;
+    font-size: 12px; font-weight: 600; line-height: 1.15; color: #2f3e41; background: #e6ebe6; border-radius: 4px; }
   .i-mods > .temp { color: #fffefa; letter-spacing: .04em; text-transform: uppercase; }
   .i-mods > .temp.hot { background: var(--hot); } .i-mods > .temp.iced { background: var(--iced); }
+  /* decaf: red text that blinks, right after hot / iced */
+  .i-mods > .decaf { color: #c62828; font-weight: 800; animation: decaf-blink .9s ease-in-out infinite alternate; }
+  @keyframes decaf-blink { to { opacity: .25; } }
+  @media (prefers-reduced-motion: reduce) { .i-mods > .decaf { animation: none; outline: 2px solid currentColor; } }
+  .item.done .decaf { animation: none; }
   .item.done { opacity: .42; background: #eceeea; }
 
   /* notes flash so they can't be missed */
@@ -276,12 +283,14 @@
 
   function itemCard(i, finishedTicket) {
     // Hot / Iced lead the customizations as one pill, so those modifiers aren't repeated
+    const isDecaf = m => /\bdecaf\b/i.test(m);
     const mods = i.mods.filter(m => !/^(hot|iced?)$/i.test(m.trim()));
+    mods.sort((a, b) => isDecaf(b) - isDecaf(a)); // decaf goes first, straight after the hot / iced pill
     const done = i.done || finishedTicket; // everything on a Ready ticket is greyed
-    const pills = (i.temp ? `<span class="temp ${i.temp}"><span class="emoji">${TEMP_ICON[i.temp]}</span>${i.temp}</span>` : '') + mods.map(m => `<span>${milk(m)}${esc(m)}</span>`).join('');
-    return `<button class="item${done ? ' done' : ''}" data-key="${esc(i.key)}" aria-pressed="${done}"
+    const pills = (i.temp ? `<span class="temp ${i.temp}"><span class="emoji">${TEMP_ICON[i.temp]}</span>${i.temp}</span>` : '') + mods.map(m => `<span${isDecaf(m) ? ' class="decaf"' : ''}>${milk(m)}${esc(m)}</span>`).join('');
+    return `<button class="item ${i.temp}${done ? ' done' : ''}" data-key="${esc(i.key)}" aria-pressed="${done}"
         title="${finishedTicket ? 'Tap to send back to In progress' : 'Tap when made'}">
-      <span class="i-name">${esc(i.name)}${i.qty !== 1 ? ` <span class="i-qty">×${fmtQty(i.qty)}</span>` : ''}</span>
+      <span class="i-name">${esc(i.name)}</span>
       ${pills ? `<span class="i-mods">${pills}</span>` : ''}
       ${i.note ? `<span class="i-note">${milk(i.note)}${milk(i.note) ? ' ' : ''}${esc(i.note)}</span>` : ''}
     </button>`;
@@ -399,7 +408,6 @@
     c.textContent = ok ? 'Live' : 'Reconnecting…';
   }
   function fmtAge(m) { const s = Math.max(0, Math.floor(m * 60)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
-  function fmtQty(q) { return Number.isInteger(q) ? q : q.toFixed(2); }
   function time(ms) { return new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }); }
   function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
   function load(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch { return d; } }

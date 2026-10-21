@@ -9,6 +9,8 @@ const crypto = require('crypto');
 
 // ---------- config ----------
 loadDotEnv(path.join(__dirname, '.env'));
+// "Today's orders" starts at midnight in the shop's time zone; cloud hosts default to UTC.
+if (process.env.TIMEZONE) process.env.TZ = process.env.TIMEZONE;
 const CFG = {
   merchantId: process.env.CLOVER_MERCHANT_ID || '',
   token: process.env.CLOVER_API_TOKEN || '',
@@ -30,7 +32,7 @@ const API_BASE = {
 // ---------- state ----------
 // orders: id -> normalized order;  stages: id -> {stage, at}
 const STAGES = ['new', 'cooking', 'ready', 'done'];
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data'); // point at a persistent volume when hosted
 const STATUS_FILE = path.join(DATA_DIR, 'stages.json');
 const orders = new Map();
 let stages = readJson(STATUS_FILE, {});
@@ -405,8 +407,12 @@ function saveStages() {
   // keep only the last 2 days of stage data
   const keepAfter = Date.now() - 2 * 86_400_000;
   for (const [id, s] of Object.entries(stages)) if (s.at < keepAfter) delete stages[id];
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(STATUS_FILE, JSON.stringify(stages));
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(STATUS_FILE, JSON.stringify(stages));
+  } catch (e) {
+    console.error('[stages] could not save — set DATA_DIR to a writable folder:', e.message); // board keeps working from memory
+  }
 }
 function loadDotEnv(f) {
   if (!fs.existsSync(f)) return;

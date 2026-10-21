@@ -32,6 +32,18 @@ Run the server on any always-on computer at the restaurant (a mini PC, a Raspber
 
 To keep it running after reboots, use a process manager, e.g. `npx pm2 start server.js --name kds && npx pm2 save`.
 
+### Or host it in the cloud (Railway)
+
+The display needs an always-on server: it checks Clover every few seconds and keeps a live connection open to each screen. **Serverless hosts such as Vercel or Netlify don't work** — they freeze the app between requests, so it never pulls orders. Railway (or Render / Fly.io) runs it as-is:
+
+1. Push this repo to GitHub (the `.env` file stays out of it — `.gitignore` covers that).
+2. At [railway.com](https://railway.com) create a project → **Deploy from GitHub repo** → pick this repo. It detects Node and runs `npm start`.
+3. In the service's **Variables**, add `CLOVER_MERCHANT_ID`, `CLOVER_API_TOKEN`, `CLOVER_REGION`, `TIMEZONE` (e.g. `America/New_York`) and `DATA_DIR=/data`. Railway sets `PORT` itself.
+4. Right-click the service → **Attach volume**, mount path `/data`, so ticket stages survive redeploys.
+5. **Settings → Networking → Generate Domain**, then open that address on the kitchen screen. The header should say **Live** and today's orders load within a few seconds; `/health` shows the last sync time.
+
+Run only one copy of the server per Clover token — two copies share Clover's rate limit and can trip "429" errors.
+
 ## Optional: instant updates with webhooks
 
 Polling is plenty fast for most kitchens. If you want near-instant updates, Clover can push events — but this requires a Clover developer app and a public HTTPS address for this server (Clover won't call `localhost`):

@@ -38,6 +38,7 @@
   button:active { background: #e6eee7; transform: translateY(1px); }
   button:focus-visible { outline: 3px solid rgba(63, 118, 88, .32); outline-offset: 2px; }
   #fs { width: 44px; padding-inline: 6px; }
+  #test-btn[aria-pressed=true] { background: #f6e7b9; border-color: #bd8421; color: #553b12; }
 
   main { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 8px; }
   .col { background: rgba(255, 254, 250, .74); border: 1px solid rgba(92, 119, 113, .18);
@@ -71,7 +72,28 @@
   .t-age { margin-left: auto; font-variant-numeric: tabular-nums; font-weight: 700; color: var(--muted); }
   .t-age.warn { color: var(--warn); } .t-age.late { color: var(--late); }
   .t-done { margin-left: auto; font-weight: 700; color: var(--ready); white-space: nowrap; }
-  .t-customer { font-size: 16px; font-weight: 700; overflow-wrap: anywhere; }
+  .t-took { font-weight: 600; color: var(--muted); }
+  /* name at the top of the ticket; tap to add or change it */
+  .t-name { margin-bottom: 3px; }
+  .name-btn { display: block; width: 100%; min-height: 32px; padding: 2px 4px; margin: -2px -4px 0; text-align: left;
+    font-size: 19px; font-weight: 800; color: var(--text); background: none; border: 1px solid transparent;
+    white-space: normal; overflow-wrap: anywhere; }
+  .name-btn:hover { background: #f2f6f0; border-color: #d8dfda; }
+  /* "+ Add name" sits in the order-number row */
+  .name-btn.add { width: auto; min-height: 30px; margin: 0; padding: 2px 9px; font-size: 13px; font-weight: 700;
+    color: var(--muted); border: 1px dashed #b7c5c1; white-space: nowrap; }
+  /* name popover, opened from the name or "+ Add name" */
+  #name-pop { position: fixed; inset: auto; margin: 0; width: min(300px, calc(100vw - 16px)); padding: 12px;
+    border: 1px solid #b7c5c1; border-radius: 8px; background: var(--card); color: var(--text);
+    box-shadow: 0 12px 32px rgba(18, 38, 48, .25); }
+  #name-pop form { display: grid; gap: 8px; }
+  #name-pop label { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  #name-field { width: 100%; min-height: 44px; padding: 6px 10px; font: inherit; font-size: 18px; font-weight: 700;
+    border: 2px solid var(--brand); border-radius: 6px; background: #fffefa; color: var(--text); }
+  .pop-actions { display: flex; gap: 6px; }
+  .pop-actions button { flex: 1; }
+  .pop-actions .primary { background: var(--brand); color: #fffefa; border-color: var(--brand); }
+  .pop-actions .primary:hover { background: var(--brand); filter: brightness(1.1); }
 
   .group-label { margin: 6px 0 3px; font-size: 10px; font-weight: 800; letter-spacing: .04em;
     text-transform: uppercase; color: var(--muted); }
@@ -84,12 +106,12 @@
   .item.iced, .item.iced:hover { border-left: 6px solid var(--iced); }
   .item:active { transform: none; }
   .item[disabled] { cursor: default; }
-  .i-name { display: block; font-size: 19px; font-weight: 800; line-height: 1.2; color: var(--text); }
-  .i-mods { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
-  .emoji { display: inline-block; font-size: 15px; line-height: 1; }
-  .i-note .emoji { vertical-align: -2px; }
-  .i-mods > span { display: inline-flex; align-items: center; gap: 3px; min-height: 20px; padding: 1px 6px;
-    font-size: 12px; font-weight: 600; line-height: 1.15; color: #2f3e41; background: #e6ebe6; border-radius: 4px; }
+  .i-name { display: block; font-size: 21px; font-weight: 800; line-height: 1.15; color: var(--text); } /* same size as the pills */
+  .i-mods { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+  .emoji { display: inline-block; font-size: 25px; line-height: 1; }
+  .i-note .emoji { font-size: 16px; vertical-align: -2px; }
+  .i-mods > span { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 3px 11px;
+    font-size: 21px; font-weight: 600; line-height: 1.15; color: #2f3e41; background: #e6ebe6; border-radius: 6px; }
   .i-mods > .temp { color: #fffefa; letter-spacing: .04em; text-transform: uppercase; }
   .i-mods > .temp.hot { background: var(--hot); } .i-mods > .temp.iced { background: var(--iced); }
   /* decaf: red text that blinks, right after hot / iced */
@@ -105,6 +127,7 @@
     animation: note-flash .9s ease-in-out infinite alternate; }
   .note { margin-top: 6px; }
   .item.done .i-note { animation: none; }
+  .ticket[data-stage=ready] .note, .ticket[data-stage=done] .note { animation: none; } /* finished: notes stop flashing */
   @keyframes note-flash {
     from { background: #f6e7b9; border-left-color: #bd8421; box-shadow: 0 0 0 0 transparent; }
     to { background: #f2a93b; border-left-color: #7a3d00; box-shadow: 0 0 0 3px #f2a93b; color: #2b1a00; }
@@ -163,6 +186,7 @@
   <span id="mode" class="pill" hidden>Demo data</span>
   <span class="spacer"></span>
   <button id="all-btn" title="Search every ticket from today, including finished ones">☰ All tickets</button>
+  <button id="test-btn" aria-pressed="false" title="Show orders rung up in Clover test mode">🧪 Test orders: Off</button>
   <button id="sound" title="Chime on new orders">🔔 On</button>
   <button id="fs" title="Full screen" aria-label="Toggle full screen">⛶</button>
   <span id="clock"></span>
@@ -176,6 +200,18 @@
   <section class="col" data-stage="ready"><h2>Ready <span class="count">0</span></h2>
     <input class="col-search" type="search" id="search-ready" placeholder="Search ready" aria-label="Search Ready" autocomplete="off"><div class="list"></div></section>
 </main>
+
+<div id="name-pop" popover>
+  <form id="name-form">
+    <label for="name-field">Name for order <span id="name-num"></span></label>
+    <input id="name-field" maxlength="60" autocomplete="off" placeholder="e.g. Sam">
+    <div class="pop-actions">
+      <button type="button" id="name-clear">Clear</button>
+      <button type="button" id="name-cancel">Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</div>
 
 <dialog id="all">
   <div class="all-wrap">
@@ -231,10 +267,14 @@
 
   // ---- render ----
   function render(freshIds = new Set()) {
+    if (editingName) return; // don't rebuild the board under someone typing a name; it renders when they finish
     $('#mode').hidden = !state.demo;
     const b = $('#banner');
-    b.textContent = state.error ? 'Clover sync problem: ' + state.error : '';
+    b.textContent = state.error || '';
     b.classList.toggle('show', !!state.error);
+    const testOn = !!(state.settings && state.settings.acceptTestOrders);
+    $('#test-btn').setAttribute('aria-pressed', testOn);
+    $('#test-btn').textContent = '🧪 Test orders: ' + (testOn ? 'On' : 'Off');
 
     for (const col of document.querySelectorAll('.col')) {
       const stage = col.dataset.stage;
@@ -255,19 +295,20 @@
     const done = finished(o);
     el.className = 'ticket' + (fresh ? ' fresh' : '');
     el.dataset.stage = o.stage;
-    el.dataset.created = o.createdTime;
+    el.dataset.created = o.queuedAt; // timers start when the order was paid
     el.dataset.type = (o.orderType || '').toLowerCase();
     const drinks = o.items.filter(i => i.kind === 'drink'), food = o.items.filter(i => i.kind !== 'drink');
     const group = (label, items) => items.length
       ? `<div class="group-label">${label}</div>${items.map(i => itemCard(i, done)).join('')}` : '';
     el.innerHTML = `
+      ${o.customer ? `<div class="t-name"><button class="name-btn" title="Change name">${esc(o.customer)}</button></div>` : ''}
       <div class="t-head">
         <span class="t-num">#${esc(o.number)}</span>
+        ${o.customer ? '' : '<button class="name-btn add">+ Add name</button>'}
         ${o.orderType ? `<span class="t-type">${esc(o.orderType)}</span>` : '<span class="t-type missing">Type not set</span>'}
-        ${done ? `<span class="t-done" title="Completed">✓ ${time(o.stageAt)}</span>` : '<span class="t-age"></span>'}
+        ${done ? `<span class="t-done" title="Completed at ${time(o.stageAt)}">✓ ${time(o.stageAt)} <span class="t-took">· took ${fmtAge((o.stageAt - o.queuedAt) / 60000)}</span></span>` : '<span class="t-age"></span>'}
         ${inPanel ? `<span class="stage-tag">${STAGE_NAME[o.stage] || o.stage}</span>` : ''}
       </div>
-      ${o.customer ? `<div class="t-customer">${esc(o.customer)}</div>` : ''}
       ${group('Drinks', drinks)}${group('Food', food)}
       ${o.note ? `<div class="note">${esc(o.note)}</div>` : ''}
       <div class="t-foot"><span>${esc(o.employee || '')}</span><span>${time(o.createdTime)}</span></div>
@@ -278,13 +319,50 @@
     el.querySelector('.go')?.addEventListener('click', () => move(o.id, NEXT[o.stage]));
     el.querySelector('.back')?.addEventListener('click', () => move(o.id, PREV[o.stage]));
     for (const btn of el.querySelectorAll('.item')) btn.onclick = () => toggleItem(o.id, btn.dataset.key);
+    el.querySelector('.name-btn').onclick = e => editName(o, e.currentTarget);
     return el;
   }
+
+  // ---- name on the ticket (popover) ----
+  let editingName = null;
+  const pop = $('#name-pop'), field = $('#name-field');
+  function editName(o, anchor) {
+    if (!pop.showPopover) { // very old browsers: no popover support
+      const name = window.prompt('Name for order #' + o.number, o.customer || '');
+      if (name !== null) saveName(o, name.trim());
+      return;
+    }
+    editingName = o;
+    $('#name-num').textContent = '#' + o.number;
+    field.value = o.customer || '';
+    $('#name-clear').hidden = !o.nameEdited; // clearing goes back to the name from Clover
+    pop.showPopover();
+    // sit under the button, kept on screen; flip above it near the bottom edge
+    const r = anchor.getBoundingClientRect(), w = pop.offsetWidth, h = pop.offsetHeight;
+    pop.style.left = Math.max(8, Math.min(r.left, innerWidth - w - 8)) + 'px';
+    pop.style.top = (r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6) + 'px';
+    field.focus();
+    field.select();
+  }
+  function saveName(o, name) {
+    if (name ? name === o.customer : !o.nameEdited) return; // nothing changed
+    if (name) copies(o.id).forEach(x => { x.customer = name; x.nameEdited = true; });
+    post('/api/orders/' + encodeURIComponent(o.id) + '/name', { name });
+  }
+  $('#name-form').onsubmit = e => {
+    e.preventDefault();
+    if (editingName) saveName(editingName, field.value.trim());
+    pop.hidePopover();
+  };
+  $('#name-cancel').onclick = () => pop.hidePopover();
+  $('#name-clear').onclick = () => { if (editingName) saveName(editingName, ''); pop.hidePopover(); };
+  // closing any way (Save, Cancel, Esc, tapping elsewhere) lets the board update again
+  pop.addEventListener('toggle', e => { if (e.newState === 'closed') { editingName = null; refresh(); } });
 
   function itemCard(i, finishedTicket) {
     // Hot / Iced lead the customizations as one pill, so those modifiers aren't repeated
     const isDecaf = m => /\bdecaf\b/i.test(m);
-    const mods = i.mods.filter(m => !/^(hot|iced?)$/i.test(m.trim()));
+    const mods = combinePumps(i.mods.filter(m => !/^(hot|iced?)$/i.test(m.trim())));
     mods.sort((a, b) => isDecaf(b) - isDecaf(a)); // decaf goes first, straight after the hot / iced pill
     const done = i.done || finishedTicket; // everything on a Ready ticket is greyed
     const pills = (i.temp ? `<span class="temp ${i.temp}"><span class="emoji">${TEMP_ICON[i.temp]}</span>${i.temp}</span>` : '') + mods.map(m => `<span${isDecaf(m) ? ' class="decaf"' : ''}>${milk(m)}${esc(m)}</span>`).join('');
@@ -294,6 +372,19 @@
       ${pills ? `<span class="i-mods">${pills}</span>` : ''}
       ${i.note ? `<span class="i-note">${milk(i.note)}${milk(i.note) ? ' ' : ''}${esc(i.note)}</span>` : ''}
     </button>`;
+  }
+  // "1 Pump Vanilla (Reg)" rung up 6 times becomes one "6 Pumps Vanilla (Reg)" pill, where the first one was
+  function combinePumps(mods) {
+    const out = [], pumps = new Map();
+    for (const m of mods) {
+      const hit = m.match(/^\s*(\d+)\s*pumps?\s+(?:of\s+)?(.+?)\s*$/i);
+      if (!hit) { out.push(m); continue; }
+      const key = hit[2].toLowerCase();
+      if (!pumps.has(key)) { pumps.set(key, { n: 0, flavor: hit[2], at: out.length }); out.push(null); }
+      pumps.get(key).n += Number(hit[1]);
+    }
+    for (const { n, flavor, at } of pumps.values()) out[at] = `${n} ${n === 1 ? 'Pump' : 'Pumps'} ${flavor}`;
+    return out;
   }
   function milk(text) { const hit = MILKS.find(([re]) => re.test(text)); return hit ? `<span class="emoji">${hit[1]}</span>` : ''; }
 
@@ -342,6 +433,7 @@
     renderAll();
   }
   function renderAll() {
+    if (editingName) return;
     const q = $('#search').value.trim().toLowerCase();
     const list = allOrders.filter(o => (filter === 'all' || (filter === 'finished') === finished(o)) && matches(o, q));
     const box = $('#all-list');
@@ -349,6 +441,12 @@
     for (const o of list) box.appendChild(ticket(o, false, true));
     tick();
   }
+  $('#test-btn').onclick = () => {
+    const on = !(state.settings && state.settings.acceptTestOrders);
+    state.settings = { ...state.settings, acceptTestOrders: on };
+    render();
+    post('/api/settings', { acceptTestOrders: on });
+  };
   $('#all-btn').onclick = () => { $('#all').showModal(); $('#search').value = ''; loadAll(); $('#search').focus(); };
   $('#all-close').onclick = () => $('#all').close();
   $('#all').addEventListener('click', e => { if (e.target === $('#all')) $('#all').close(); });

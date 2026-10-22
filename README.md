@@ -6,7 +6,10 @@ A live order queue for a Clover POS. Every order rung up on Clover appears on th
 - Order number, customer name, order type (Dine In / To Go…), server, and a running timer per ticket — amber at 8 min, red at 15
 - Back button and **Recall** to undo a mis-tap
 - Works on any browser: a wall TV, a tablet, or several screens at once (they stay in sync)
-- No database or runtime dependencies — Node.js 18 or newer
+- Only paid orders reach the board; Clover test-mode orders are hidden unless **🧪 Test orders** is on
+- Ready tickets stay up all day with their completion time and how long they took
+- Optional MySQL / MariaDB database keeps every ticket and its kitchen state by timestamp (set `DATABASE_URL`)
+- Node.js 18 or newer
 
 ## 1. Try it with sample orders
 
@@ -57,6 +60,7 @@ Polling keeps running as a safety net, so nothing is lost if a webhook is missed
 
 ## Notes
 
-- Kitchen stages (New / In progress / Ready) live in this app, not in Clover, and are saved to `data/stages.json` so a restart doesn't lose them.
+- Kitchen stages (New / In progress / Ready), tapped items and names typed on the screen live in this app, not in Clover. With `DATABASE_URL` set they're saved in MySQL / MariaDB (tables `kds_tickets` and `kds_settings`, created automatically) along with each order and its timestamps, and today's tickets are restored on restart. Without it, stages are saved to `data/stages.json`.
+- On a cloud host, add `DATABASE_URL` to the service's environment variables — the `.env` file isn't deployed.
 - Orders with no items yet don't appear until something is added. Deleted orders disappear.
 - Tweak the timer thresholds at the top of the script in `public/index.html` (`WARN_MIN`, `LATE_MIN`).

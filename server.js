@@ -1,11 +1,12 @@
 // Clover Kitchen Display — live order queue for Clover POS.
-// Zero dependencies: needs Node.js 18+ only.  Run:  node server.js
+// Needs Node.js 18+.  Run:  npm install && npm start
 'use strict';
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { createStore } = require('./store');
 
 // ---------- config ----------
 loadDotEnv(path.join(__dirname, '.env'));
@@ -18,7 +19,7 @@ const CFG = {
   port: Number(process.env.PORT || 3000),
   pollSeconds: Math.max(2, Number(process.env.POLL_SECONDS || 5)),
   webhookAuth: process.env.CLOVER_WEBHOOK_AUTH || '',
-  hideDoneMinutes: Number(process.env.HIDE_DONE_MINUTES || 10),
+  databaseUrl: process.env.DATABASE_URL || '',
   demo: process.env.DEMO === '1' || !process.env.CLOVER_API_TOKEN,
 };
 const API_BASE = {
@@ -30,12 +31,14 @@ const API_BASE = {
 }[CFG.region] || 'https://api.clover.com';
 
 // ---------- state ----------
-// orders: id -> normalized order;  stages: id -> {stage, at}
+// orders: id -> normalized order;  stages: id -> {stage, at, done: [item keys], name?}
 const STAGES = ['new', 'cooking', 'ready', 'done'];
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data'); // point at a persistent volume when hosted
-const STATUS_FILE = path.join(DATA_DIR, 'stages.json');
+// demo tickets are kept apart from the real merchant's in the database
+const store = createStore({ databaseUrl: CFG.databaseUrl, dataDir: DATA_DIR, merchantId: CFG.demo ? 'demo' : CFG.merchantId });
 const orders = new Map();
-let stages = readJson(STATUS_FILE, {});
+let stages = {};
+let settings = { acceptTestOrders: false };
 let lastPoll = startOfToday();
 let lastError = null;
 const clients = new Set();
@@ -52,7 +55,7 @@ async function clover(pathAndQuery) {
 
 // Item categories (for food vs drink) need Inventory: Read; without it Clover rejects the whole request,
 // so drop that expansion on a 401 and fall back to guessing from item names.
-let EXPAND = 'expand=lineItems,lineItems.modifications,lineItems.item.categories,orderType,employee,customers';
+let EXPAND = 'expand=lineItems,lineItems.modifications,lineItems.item.categories,orderType,employee,customers,payments';
 async function cloverOrders(pathAndQuery) {
   try {
     return await clover(pathAndQuery());
@@ -67,23 +70,25 @@ async function cloverOrders(pathAndQuery) {
 async function pollOrders() {
   const since = lastPoll - 60_000; // 1-minute overlap so nothing slips between polls
   const startedAt = Date.now();
-  let offset = 0;
+  let offset = 0, changed = false;
   try {
     for (;;) {
       const page = await cloverOrders(() => `/v3/merchants/${CFG.merchantId}/orders?filter=modifiedTime>=${since}` +
         `&${EXPAND}&orderBy=modifiedTime%20ASC&limit=100&offset=${offset}`);
       const els = page.elements || [];
-      els.forEach(upsert);
+      for (const el of els) if (upsert(el)) changed = true;
       if (els.length < 100) break;
       offset += 100;
     }
     lastPoll = startedAt;
+    if (lastError) changed = true;
     lastError = null;
   } catch (e) {
+    if (lastError !== e.message) changed = true;
     lastError = e.message;
     console.error('[poll]', e.message);
   }
-  broadcast();
+  if (changed) broadcast(); // screens only get a new snapshot when something changed
 }
 
 async function fetchOrder(id) {
@@ -96,9 +101,10 @@ async function fetchOrder(id) {
 }
 
 // ---------- normalize ----------
+// Returns true when the ticket changed.
 function upsert(o) {
-  if (!o || !o.id) return;
-  if (o.deleted) return remove(o.id);
+  if (!o || !o.id) return false;
+  if (o.deleted) { remove(o.id); return true; }
   // only today's orders (the modifiedTime poll also returns older orders that were edited today)
   if ((o.createdTime || Date.now()) < startOfToday()) return orders.delete(o.id);
   const items = (o.lineItems && o.lineItems.elements) || [];
@@ -115,25 +121,55 @@ function upsert(o) {
       cards.push({ key: `${li.id || 'line' + idx}#${n}`, name: li.name || 'Item', mods, note, ...classify(li, mods) });
     }
   });
-  if (!cards.length) return; // empty tickets aren't kitchen-relevant yet
+  if (!cards.length) return false; // empty tickets aren't kitchen-relevant yet
   const { note, validatedName } = splitNote(o.note);
-  orders.set(o.id, {
+  const prev = orders.get(o.id);
+  const customerId = (((o.customers && o.customers.elements) || [])[0] || {}).id || '';
+  const { paid, paidAt } = payment(o);
+  const next = {
     id: o.id,
     number: o.title || o.id.slice(-4),
     createdTime: o.createdTime || Date.now(),
+    queuedAt: paidAt || o.createdTime || Date.now(), // tickets reach the kitchen once they're paid
     modifiedTime: o.modifiedTime || Date.now(),
     state: o.state || 'open',
     paymentState: o.paymentState || '',
+    paid,
+    testMode: !!o.testMode,
     orderType: normalizeOrderType(o.orderType && o.orderType.label),
     employee: (o.employee && o.employee.name) || '',
-    customerId: (((o.customers && o.customers.elements) || [])[0] || {}).id || '',
-    customer: customerName(o) || validatedName,
+    customerId,
+    // keep a name already looked up (or restored from the database) while a new lookup is pending
+    customer: customerName(o) || (prev && prev.customerId === customerId && prev.customer) || validatedName,
     validatedName,
     note,
     total: typeof o.total === 'number' ? o.total : null,
     items: cards,
-  });
-  if (!stages[o.id]) setStage(o.id, 'new', false);
+  };
+  if (prev && JSON.stringify(prev) === JSON.stringify(next)) return false;
+  orders.set(o.id, next);
+  if (!stages[o.id]) stages[o.id] = { stage: 'new', at: next.queuedAt, done: [] };
+  persist(o.id);
+  return true;
+}
+
+// Paid = Clover says PAID, or successful payments cover the total.
+// (Clover's order list can report paymentState OPEN for paid orders, so the payments themselves are checked.)
+function payment(o) {
+  if (CFG.demo && !o.payments) return { paid: true, paidAt: o.createdTime };
+  const ok = ((o.payments && o.payments.elements) || []).filter(p => p.result === 'SUCCESS' || p.result === 'AUTH');
+  const amount = ok.reduce((sum, p) => sum + (p.amount || 0), 0);
+  const paid = o.paymentState === 'PAID' || (ok.length > 0 && amount >= (o.total || 0));
+  const paidAt = ok.length ? Math.min(...ok.map(p => p.createdTime || Infinity)) : null;
+  return { paid, paidAt: paid && Number.isFinite(paidAt) ? paidAt : null };
+}
+
+// Paid orders only; Clover test-mode orders only when the screen's toggle allows them.
+const onBoard = o => o.paid && (settings.acceptTestOrders || !o.testMode);
+
+function persist(id) {
+  const o = orders.get(id);
+  if (o && stages[id]) store.saveTicket(o, stages[id]);
 }
 
 // The register adds "Validated customer <name>" (or "... Name Unknown") to the order note.
@@ -152,43 +188,53 @@ function splitNote(raw) {
 function remove(id) {
   orders.delete(id);
   delete stages[id];
-  saveStages();
+  store.markDeleted(id);
 }
 
-function setStage(id, stage, persist = true) {
+function setStage(id, stage, save = true) {
   const prev = stages[id] || {};
-  // moving a ticket back un-greys its items so they can be tapped again
   const back = STAGES.indexOf(stage) < STAGES.indexOf(prev.stage);
   const o = orders.get(id);
   // reaching Ready greys every item; moving back un-greys them so they can be tapped again
   const done = stage === 'ready' && o ? o.items.map(i => i.key) : back ? [] : prev.done || [];
-  stages[id] = { stage, at: Date.now(), done };
-  if (persist) saveStages();
+  stages[id] = { ...prev, stage, at: Date.now(), done };
+  if (save) persist(id);
+}
+
+// A name typed on the kitchen screen; an empty name goes back to the one from Clover.
+function setName(id, name) {
+  const o = orders.get(id);
+  const s = stages[id] || (stages[id] = { stage: 'new', at: o.queuedAt, done: [] });
+  if (name) s.name = name; else delete s.name;
+  persist(id);
 }
 
 // Tap an item to grey it out. The first tap starts a new ticket; greying the last item makes it Ready.
 // Tapping an item on a Ready ticket sends it back to In progress with just that item un-greyed.
 function setItemDone(id, key, done) {
   const o = orders.get(id);
-  const s = stages[id] || (stages[id] = { stage: 'new', at: o.createdTime, done: [] });
+  const s = stages[id] || (stages[id] = { stage: 'new', at: o.queuedAt, done: [] });
   if (!done && isFinished(s.stage)) {
-    stages[id] = { stage: 'cooking', at: Date.now(), done: o.items.map(i => i.key).filter(k => k !== key) };
-    return saveStages();
+    stages[id] = { ...s, stage: 'cooking', at: Date.now(), done: o.items.map(i => i.key).filter(k => k !== key) };
+    return persist(id);
   }
   const set = new Set(s.done || []);
   done ? set.add(key) : set.delete(key);
   s.done = [...set];
   if (done && s.stage === 'new') setStage(id, 'cooking', false);
   if (o.items.every(i => set.has(i.key)) && (s.stage === 'new' || s.stage === 'cooking')) setStage(id, 'ready', false);
-  saveStages();
+  persist(id);
 }
 
 const isFinished = stage => stage === 'ready' || stage === 'done';
 
 function withStage(o) {
-  const s = stages[o.id] || { stage: 'new', at: o.createdTime };
+  const s = stages[o.id] || { stage: 'new', at: o.queuedAt };
   const done = new Set(s.done || []);
-  return { ...o, stage: s.stage, stageAt: s.at, items: o.items.map(i => ({ ...i, done: done.has(i.key) })) };
+  return {
+    ...o, stage: s.stage, stageAt: s.at, customer: s.name || o.customer, nameEdited: !!s.name,
+    items: o.items.map(i => ({ ...i, done: done.has(i.key) })),
+  };
 }
 
 // The orders list only returns customer ids, so names are looked up once per customer and cached.
@@ -213,7 +259,7 @@ setInterval(async function lookupNext() {
     const c = await clover(`/v3/merchants/${CFG.merchantId}/customers/${id}`);
     const name = [c.firstName, c.lastName].filter(Boolean).join(' ');
     customerNames.set(id, name);
-    for (const o of orders.values()) if (o.customerId === id) o.customer = name || o.validatedName;
+    for (const o of orders.values()) if (o.customerId === id) { o.customer = name || o.validatedName; persist(o.id); }
     if (customerQueue.length % 20 === 0) broadcast(); // refresh screens every 20 names and at the end
   } catch (e) {
     if (/429/.test(e.message)) { customerQueue.unshift(id); lookupNext.pauseUntil = Date.now() + 3000; } // back off, then retry
@@ -248,22 +294,24 @@ function classify(li, mods) {
   return { kind, temp };
 }
 
-function snapshot() {
-  const cutoff = Date.now() - CFG.hideDoneMinutes * 60_000;
-  const list = [];
+// Today's tickets on the board. Ready tickets stay all day; at midnight the board starts fresh.
+function boardTickets() {
   const today = startOfToday();
+  const list = [];
   for (const o of orders.values()) {
-    if (o.createdTime < today) { orders.delete(o.id); continue; } // drop yesterday's tickets after midnight
-    const t = withStage(o);
-    if (isFinished(t.stage) && t.stageAt < cutoff) continue; // still findable under All tickets
-    list.push(t);
+    if (o.createdTime < today) { orders.delete(o.id); delete stages[o.id]; continue; } // yesterday's stay in the database
+    if (onBoard(o)) list.push(withStage(o));
   }
-  list.sort((a, b) => a.createdTime - b.createdTime);
+  return list.sort((a, b) => a.queuedAt - b.queuedAt);
+}
+
+function snapshot() {
   return {
-    orders: list,
+    orders: boardTickets(),
+    settings,
     demo: CFG.demo,
     lastSync: CFG.demo ? Date.now() : lastPoll,
-    error: lastError,
+    error: lastError || store.status(),
     serverTime: Date.now(),
   };
 }
@@ -289,10 +337,26 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'GET' && url.pathname === '/api/tickets') {
-      const today = startOfToday();
-      const list = [...orders.values()].filter(o => o.createdTime >= today).map(withStage);
-      list.sort((a, b) => b.createdTime - a.createdTime);
-      return send(res, 200, { orders: list });
+      return send(res, 200, { orders: boardTickets().reverse() });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/settings') {
+      const { acceptTestOrders } = JSON.parse((await readBody(req)) || '{}');
+      if (typeof acceptTestOrders !== 'boolean') return send(res, 400, { error: 'acceptTestOrders must be true or false' });
+      settings = { ...settings, acceptTestOrders };
+      await store.saveSetting('acceptTestOrders', acceptTestOrders)
+        .catch(e => console.error('[settings] not saved:', e.message)); // still applies until restart
+      broadcast();
+      return send(res, 200, { ok: true, settings });
+    }
+
+    if (req.method === 'POST' && /^\/api\/orders\/[^/]+\/name$/.test(url.pathname)) {
+      const id = decodeURIComponent(url.pathname.split('/')[3]);
+      const { name } = JSON.parse((await readBody(req)) || '{}');
+      if (!orders.has(id) || typeof name !== 'string') return send(res, 400, { error: 'bad order or name' });
+      setName(id, name.trim().slice(0, 60));
+      broadcast();
+      return send(res, 200, { ok: true });
     }
 
     if (req.method === 'POST' && /^\/api\/orders\/[^/]+\/items$/.test(url.pathname)) {
@@ -374,7 +438,7 @@ function demoOrder() {
   demoOrder.count = (demoOrder.count || 100) + 1;
   const [firstName, lastName] = DEMO_NAMES[demoOrder.count % DEMO_NAMES.length];
   upsert({
-    id: crypto.randomBytes(7).toString('hex').toUpperCase(),
+    id: 'DEMO' + crypto.randomBytes(5).toString('hex').toUpperCase(),
     title: String(demoOrder.count),
     createdTime: Date.now(), modifiedTime: Date.now(), state: 'open',
     orderType: { label: ['Dine In', 'To Go', 'Delivery'][Math.floor(Math.random() * 3)] },
@@ -403,18 +467,6 @@ function safeEqual(a, b) {
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
 function startOfToday() { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
-function readJson(f, dflt) { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return dflt; } }
-function saveStages() {
-  // keep only the last 2 days of stage data
-  const keepAfter = Date.now() - 2 * 86_400_000;
-  for (const [id, s] of Object.entries(stages)) if (s.at < keepAfter) delete stages[id];
-  try {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(STATUS_FILE, JSON.stringify(stages));
-  } catch (e) {
-    console.error('[stages] could not save — set DATA_DIR to a writable folder:', e.message); // board keeps working from memory
-  }
-}
 function loadDotEnv(f) {
   if (!fs.existsSync(f)) return;
   for (const line of fs.readFileSync(f, 'utf8').split(/\r?\n/)) {
@@ -424,7 +476,24 @@ function loadDotEnv(f) {
 }
 
 // ---------- start ----------
-server.listen(CFG.port, () => {
+async function start() {
+  // restore today's tickets (Ready ones included) before the first Clover check
+  try {
+    const saved = await store.init(startOfToday());
+    for (const { order, stage } of saved.tickets) { orders.set(order.id, order); stages[order.id] = stage; }
+    Object.assign(stages, saved.stages || {});
+    settings = { ...settings, ...saved.settings };
+    console.log(store.kind === 'mysql'
+      ? `Database connected — restored ${saved.tickets.length} of today's tickets`
+      : `Saving ticket stages to ${DATA_DIR} (set DATABASE_URL to keep full ticket history in MySQL)`);
+  } catch (e) {
+    lastError = 'Database unavailable — tickets won’t be saved: ' + e.message;
+    console.error('[db] could not connect:', e.message);
+  }
+  server.listen(CFG.port, onListen);
+}
+
+function onListen() {
   console.log(`Clover kitchen display → http://localhost:${CFG.port}`);
   if (CFG.demo) {
     console.log('DEMO MODE: no CLOVER_API_TOKEN set — generating sample orders.');
@@ -439,5 +508,7 @@ server.listen(CFG.port, () => {
     pollOrders();
     setInterval(pollOrders, CFG.pollSeconds * 1000);
   }
-  setInterval(broadcast, 30_000); // refresh hidden/aged tickets
-});
+  setInterval(broadcast, 30_000); // keep screens in step even when nothing changed
+}
+
+start();

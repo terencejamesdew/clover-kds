@@ -332,6 +332,7 @@ function snapshot() {
     lastSync: CFG.demo ? Date.now() : lastPoll,
     error: lastError || store.status(),
     serverTime: Date.now(),
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
   };
 }
 
@@ -547,7 +548,22 @@ function loadDotEnv(f) {
 }
 
 // ---------- start ----------
+// "Today" must be the shop's day. Cloud hosts run on UTC, where midnight is 8 PM in New York, so without
+// TIMEZONE set the evening's orders would count as the next day. Fall back to the time zone set in Clover.
+async function useShopTimeZone() {
+  if (process.env.TIMEZONE || process.env.TZ || CFG.demo) return;
+  try {
+    const { timezone } = await clover(`/v3/merchants/${CFG.merchantId}/properties`);
+    if (timezone) process.env.TZ = timezone;
+  } catch (e) {
+    console.warn('[timezone] could not read the shop time zone from Clover — set TIMEZONE:', e.message);
+  }
+}
+
 async function start() {
+  await useShopTimeZone();
+  lastPoll = startOfToday();
+  console.log(`Time zone ${Intl.DateTimeFormat().resolvedOptions().timeZone}; today started ${new Date(startOfToday()).toString()}`);
   // restore today's tickets (Ready ones included) before the first Clover check;
   // a database that's briefly unreachable gets three tries before the board starts without it
   try {

@@ -197,7 +197,7 @@ function setStage(id, stage, save = true) {
   const o = orders.get(id);
   // reaching Ready greys every item; moving back un-greys them so they can be tapped again
   const done = stage === 'ready' && o ? o.items.map(i => i.key) : back ? [] : prev.done || [];
-  stages[id] = { ...prev, stage, at: Date.now(), done };
+  stages[id] = { ...prev, stage, at: Date.now(), done, v: Date.now() };
   if (save) persist(id);
 }
 
@@ -206,6 +206,7 @@ function setName(id, name) {
   const o = orders.get(id);
   const s = stages[id] || (stages[id] = { stage: 'new', at: o.queuedAt, done: [] });
   if (name) s.name = name; else delete s.name;
+  s.v = Date.now();
   persist(id);
 }
 
@@ -215,7 +216,7 @@ function setItemDone(id, key, done) {
   const o = orders.get(id);
   const s = stages[id] || (stages[id] = { stage: 'new', at: o.queuedAt, done: [] });
   if (!done && isFinished(s.stage)) {
-    stages[id] = { ...s, stage: 'cooking', at: Date.now(), done: o.items.map(i => i.key).filter(k => k !== key) };
+    stages[id] = { ...s, stage: 'cooking', at: Date.now(), done: o.items.map(i => i.key).filter(k => k !== key), v: Date.now() };
     return persist(id);
   }
   const set = new Set(s.done || []);
@@ -223,6 +224,7 @@ function setItemDone(id, key, done) {
   s.done = [...set];
   if (done && s.stage === 'new') setStage(id, 'cooking', false);
   if (o.items.every(i => set.has(i.key)) && (s.stage === 'new' || s.stage === 'cooking')) setStage(id, 'ready', false);
+  stages[id].v = Date.now();
   persist(id);
 }
 
@@ -296,17 +298,34 @@ function classify(li, mods) {
 
 // Today's tickets on the board. Ready tickets stay all day; at midnight the board starts fresh.
 function boardTickets() {
-  const today = startOfToday();
+  closePreviousDays();
   const list = [];
-  for (const o of orders.values()) {
-    if (o.createdTime < today) { orders.delete(o.id); delete stages[o.id]; continue; } // yesterday's stay in the database
-    if (onBoard(o)) list.push(withStage(o));
-  }
+  for (const o of orders.values()) if (onBoard(o)) list.push(withStage(o));
   return list.sort((a, b) => a.queuedAt - b.queuedAt);
+}
+
+// When a day ends, its unfinished tickets are marked Ready as of midnight (saved that way) and leave the board.
+// Returns true if any tickets were removed.
+function closePreviousDays() {
+  const today = startOfToday();
+  let removed = false;
+  for (const o of orders.values()) {
+    if (o.createdTime >= today) continue;
+    const s = stages[o.id];
+    if (s && !isFinished(s.stage)) {
+      stages[o.id] = { ...s, stage: 'ready', at: endOfDay(o.createdTime), done: o.items.map(i => i.key), auto: true, v: Date.now() };
+      persist(o.id);
+    }
+    orders.delete(o.id);
+    delete stages[o.id];
+    removed = true;
+  }
+  return removed;
 }
 
 function snapshot() {
   return {
+    version,
     orders: boardTickets(),
     settings,
     demo: CFG.demo,
@@ -317,9 +336,46 @@ function snapshot() {
 }
 
 // ---------- live push (Server-Sent Events) ----------
+// Every change goes to every screen at once, numbered. A once-a-second heartbeat carries the latest number,
+// so a screen that missed an update (or whose connection quietly died) notices within a couple of seconds.
+let version = 0;
 function broadcast() {
+  version++;
   const data = 'data: ' + JSON.stringify(snapshot()) + '\n\n';
   for (const res of clients) res.write(data);
+}
+setInterval(() => {
+  const ping = `event: ping\ndata: ${version}\n\n`;
+  for (const res of clients) res.write(ping);
+}, 1000);
+
+// Another server sharing the database (a second copy, or two overlapping during a deploy) may have changed
+// tickets. Check every second and take any newer kitchen change, so all screens agree within ~2 seconds.
+async function syncFromStore() {
+  if (syncFromStore.busy) return;
+  syncFromStore.busy = true;
+  try {
+    const got = await store.changes(startOfToday());
+    if (!got) return;
+    let changed = false;
+    for (const { order, stage } of got.tickets) {
+      if (stage.stage === 'deleted') {
+        if (orders.delete(order.id)) { delete stages[order.id]; changed = true; }
+        continue;
+      }
+      if (!orders.has(order.id)) { orders.set(order.id, order); changed = true; }
+      const local = stages[order.id];
+      if (!local || stage.v > (local.v || 0)) { stages[order.id] = stage; changed = true; }
+    }
+    for (const [name, value] of Object.entries(got.settings)) {
+      if (settings[name] !== value) { settings = { ...settings, [name]: value }; changed = true; }
+    }
+    if (changed) broadcast();
+  } catch (e) {
+    console.error('[sync]', e.message);
+  } finally {
+    syncFromStore.busy = false;
+  }
 }
 
 // ---------- HTTP ----------
@@ -327,12 +383,17 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x');
   try {
     if (req.method === 'GET' && url.pathname === '/events') {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-      res.write('retry: 3000\n');
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no', // ask hosting proxies not to hold events back
+      });
+      req.socket.setNoDelay(true);
+      res.write('retry: 1000\n');
       res.write('data: ' + JSON.stringify(snapshot()) + '\n\n');
       clients.add(res);
-      const ping = setInterval(() => res.write(': ping\n\n'), 25_000);
-      req.on('close', () => { clearInterval(ping); clients.delete(res); });
+      req.on('close', () => clients.delete(res));
       return;
     }
 
@@ -466,7 +527,17 @@ function safeEqual(a, b) {
   const x = Buffer.from(String(a)), y = Buffer.from(String(b));
   return x.length === y.length && crypto.timingSafeEqual(x, y);
 }
+async function retry(fn, tries, waitMs) {
+  for (let n = 1; ; n++) {
+    try { return await fn(); } catch (e) {
+      if (n >= tries) throw e;
+      console.warn(`[db] attempt ${n} failed (${e.message}); retrying in ${waitMs / 1000}s`);
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+  }
+}
 function startOfToday() { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
+function endOfDay(ms) { const d = new Date(ms); d.setHours(24, 0, 0, 0); return d.getTime(); } // the following midnight
 function loadDotEnv(f) {
   if (!fs.existsSync(f)) return;
   for (const line of fs.readFileSync(f, 'utf8').split(/\r?\n/)) {
@@ -477,9 +548,10 @@ function loadDotEnv(f) {
 
 // ---------- start ----------
 async function start() {
-  // restore today's tickets (Ready ones included) before the first Clover check
+  // restore today's tickets (Ready ones included) before the first Clover check;
+  // a database that's briefly unreachable gets three tries before the board starts without it
   try {
-    const saved = await store.init(startOfToday());
+    const saved = await retry(() => store.init(startOfToday()), 3, 5000);
     for (const { order, stage } of saved.tickets) { orders.set(order.id, order); stages[order.id] = stage; }
     Object.assign(stages, saved.stages || {});
     settings = { ...settings, ...saved.settings };
@@ -490,7 +562,21 @@ async function start() {
     lastError = 'Database unavailable — tickets won’t be saved: ' + e.message;
     console.error('[db] could not connect:', e.message);
   }
+  await closeOldInStore();
   server.listen(CFG.port, onListen);
+}
+
+// Tickets from earlier days the server never saw finish (it was off at midnight): mark them Ready in the database.
+let oldClosed = false;
+async function closeOldInStore() {
+  if (oldClosed) return;
+  try {
+    const n = await store.closeOpenBefore(startOfToday(), endOfDay);
+    if (n) console.log(`Marked ${n} unfinished ticket(s) from earlier days as Ready`);
+    oldClosed = true;
+  } catch (e) {
+    console.error('[db] could not close earlier days yet:', e.message); // tried again every minute
+  }
 }
 
 function onListen() {
@@ -509,6 +595,8 @@ function onListen() {
     setInterval(pollOrders, CFG.pollSeconds * 1000);
   }
   setInterval(broadcast, 30_000); // keep screens in step even when nothing changed
+  setInterval(() => { if (closePreviousDays()) broadcast(); closeOldInStore(); }, 60_000); // clear the board soon after midnight
+  setInterval(syncFromStore, 1000);
 }
 
 start();

@@ -248,21 +248,36 @@
   const $ = s => document.querySelector(s);
 
   // ---- live stream ----
+  // The server pushes every change and sends a heartbeat each second carrying its latest update number.
+  // If the heartbeat stops for 2.5 s, or shows an update this screen never got, reconnect: the server
+  // sends the whole board on connect, so screens stay within ~3 s of each other even after a dropped connection.
+  let es = null, lastHeard = 0;
   function connect() {
-    const es = new EventSource('/events');
+    if (es) es.close();
+    es = new EventSource('/events');
+    lastHeard = Date.now();
     es.onopen = () => setConn(true);
     es.onerror = () => setConn(false);
-    es.onmessage = ev => {
-      const next = JSON.parse(ev.data);
-      clockSkew = next.serverTime - Date.now();
-      const ids = new Set(next.orders.map(o => o.id));
-      const fresh = seen ? next.orders.filter(o => !seen.has(o.id) && o.stage === 'new') : [];
-      seen = ids;
-      state = next;
-      render(new Set(fresh.map(o => o.id)));
-      if (fresh.length) chime();
-      if ($('#all').open) loadAll();
-    };
+    es.onmessage = ev => { lastHeard = Date.now(); apply(JSON.parse(ev.data)); };
+    es.addEventListener('ping', ev => {
+      lastHeard = Date.now();
+      setConn(true);
+      if (Number(ev.data) !== state.version) connect(); // missed an update
+    });
+  }
+  setInterval(() => { if (Date.now() - lastHeard > 2500) { setConn(false); connect(); } }, 1000);
+  // a tablet waking from sleep reconnects straight away instead of waiting for the watchdog
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) connect(); });
+
+  function apply(next) {
+    clockSkew = next.serverTime - Date.now();
+    const ids = new Set(next.orders.map(o => o.id));
+    const fresh = seen ? next.orders.filter(o => !seen.has(o.id) && o.stage === 'new') : [];
+    seen = ids;
+    state = next;
+    render(new Set(fresh.map(o => o.id)));
+    if (fresh.length) chime();
+    if ($('#all').open) loadAll();
   }
 
   // ---- render ----
